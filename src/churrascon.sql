@@ -24,7 +24,7 @@ CREATE TABLE `churrascon`.`item_cotacao` (
 CREATE TABLE `churrascon`.`cotacao` (
     `id_cotacao` BIGINT AUTO_INCREMENT PRIMARY KEY,
     `data_criacao` BIGINT NOT NULL DEFAULT 0,
-    `status` CHAR(1) NOT NULL DEFAULT 'A',
+    `status` CHAR(1) NOT NULL DEFAULT 'A', -- Tipos de status A = Andamento, Encerrado = Encerrado, C = Cancelado
     `id_cotacao_pai` BIGINT NULL,
     `id_solicitacao` BIGINT NOT NULL,
     `id_fornecedor` BIGINT NOT NULL
@@ -210,12 +210,12 @@ DELIMITER ;
 --
 
 -- view para clientes
-CREATE 
-    ALGORITHM = UNDEFINED 
-    DEFINER = `root`@`localhost` 
+CREATE
+    ALGORITHM = UNDEFINED
+    DEFINER = `root`@`localhost`
     SQL SECURITY DEFINER
 VIEW `vw_cliente` AS
-    select 
+    select
         `cliente`.`id_pessoa` AS `id_pessoa`,
         `cliente`.`id_cliente` AS `id_cliente`,
         `pessoa`.`nome` AS `nome`,
@@ -242,3 +242,185 @@ FROM (
 	`churrascon`.`pessoa`
 INNER JOIN
 	`churrascon`.`fornecedor` ON ((`pessoa`.`id_pessoa` = `fornecedor`.`id_fornecedor`)));
+
+-- View para vendas
+SELECT
+    *
+FROM
+    `churrascon`.`solicitacao` s
+INNER JOIN
+    `churrascon`.`cotacao` c ON s.`id_solicitacao` = c.`id_solicitacao`
+INNER JOIN
+    `churrascon`.`item_cotacao` ic ON c.`id_cotacao` = ic.`id_cotacao`
+INNER JOIN
+    `churrascon`.`item_solicitacao` `is` ON ic.`id_item_solicitacao` = `is`.`id_item_solicitacao`
+WHERE
+    s.`status` = 'E'
+    AND c.`status` = 'E' -- Todas as cotações que estão encerradas
+
+-- View para retornar a quantidade de cotações por solicitação
+CREATE OR REPLACE VIEW `churrascon`.`vw_sol_qtd_cot` AS
+SELECT
+    c.id_solicitacao, count(id_cotacao) as qtd_cot
+FROM
+    cotacao c
+GROUP BY c.id_solicitacao;
+
+-- View para retornar as cotações que tem somente uma cotação atrelada
+CREATE OR REPLACE VIEW `churrascon`.`vw_solicitacao_unique_cot` AS
+SELECT
+    s.*
+FROM
+    solicitacao s
+INNER JOIN
+    vw_sol_qtd_cot vwc ON s.id_solicitacao = vwc.id_solicitacao
+WHERE
+    vwc.qtd_cot = 1;
+
+-- View para calcular o valor de cada cotação
+CREATE OR REPLACE VIEW `churrascon`.`vw_valor_cotacao` AS
+SELECT
+    c.id_cotacao,
+	c.id_solicitacao,
+    SUM(ic.quantidade * valor_unitario) as valor
+FROM
+    cotacao c
+        INNER JOIN
+    item_cotacao ic ON c.id_cotacao = ic.id_cotacao
+WHERE c.status = 'E'
+GROUP BY
+    c.id_cotacao;
+
+-- view para calcular a cotação de menor valor
+CREATE OR REPLACE VIEW `churrascon`.`vw_cotacao_menor_valor` AS
+SELECT
+    c.*,
+    MIN(valor) AS valor
+FROM
+    vw_valor_cotacao vc
+INNER JOIN
+    cotacao c ON vc.id_cotacao = c.id_cotacao;
+-- View para listar os produtos não cotados
+CREATE OR REPLACE VIEW `vw_produtos_nao_cotados` AS
+SELECT
+    *
+FROM
+    `produto` `p`
+WHERE
+    `id_produto`
+NOT IN (
+    SELECT id_produto FROM vw_produtos_cotados
+);
+
+-- View para listar os produtos cotados
+CREATE OR REPLACE VIEW `vw_produtos_cotados` AS
+SELECT
+    `is`.`id_produto`
+FROM
+    `item_cotacao` `ic`
+INNER join
+    `item_solicitacao` `is` ON `ic`.`id_item_solicitacao` = `is`.`id_item_solicitacao`
+GROUP BY `is`.`id_produto`;
+
+-- Select para selecionar o total cotado para cada cliente
+CREATE OR REPLACE VIEW `vw_total_cotado_cliente` AS
+SELECT
+	p.nome as Cliente,
+	SUM(vc.valor) as Valor
+FROM
+	cliente c
+INNER JOIN
+	solicitacao s ON c.id_cliente = s.id_cliente
+INNER JOIN
+	pessoa p ON c.id_pessoa = p.id_pessoa
+INNER JOIN
+	vw_valor_cotacao vc ON vc.id_solicitacao = s.id_solicitacao
+GROUP BY c.id_cliente;
+
+-- view para o total de cotações aprovadas ordenado pelo tal
+CREATE OR REPLACE VIEW `vw_fornecedor_total_cotacao` AS
+SELECT
+	p.nome as Fornecedor,
+	f.cnpj as CNPJ,
+	COUNT(id_cotacao) as `Total de cotações aprovadas`
+FROM
+	fornecedor f
+INNER JOIN
+	pessoa p ON f.id_pessoa = p.id_pessoa
+INNER JOIN
+	cotacao c ON f.id_fornecedor = c.id_fornecedor
+WHERE
+	c.status = 'E'
+GROUP BY f.id_fornecedor
+ORDER BY `Total de cotações aprovadas`;
+
+SELECT
+	*
+FROM
+	solicitacao s
+INNER JOIN
+	item_solicitacao `is` ON s.id_solicitacao = `is`.id_solicitacao
+INNER JOIN
+	item_cotacao ic ON ic.id_item_solicitacao = `is`.id_item_solicitacao
+INNER JOIN
+	produto p ON `is`.id_produto = p.id_produto
+INNER JOIN
+	cotacao c ON c.id_cotacao = ic.id_cotacao
+WHERE c.status = 'E' AND s.status = 'E';
+
+-- View para retornar a quantidade de produtoas
+CREATE OR REPLACE VIEW `vw_total_produto_solicitacao` AS
+SELECT
+	`is`.id_solicitacao,
+	COUNT(`is`.id_produto) as total_produto
+FROM
+	item_solicitacao `is`
+LEFT JOIN
+	item_cotacao ic ON ic.id_item_solicitacao = `is`.id_item_solicitacao
+INNER JOIN
+	cotacao c ON c.id_cotacao = ic.id_cotacao
+INNER JOIN
+	solicitacao s ON s.id_solicitacao = `is`.id_solicitacao
+WHERE c.status = 'E' AND s.status = 'E'
+GROUP BY `is`.id_solicitacao;
+
+-- View para contar a quantidade de produtos cadastrados no sistema
+CREATE OR REPLACE VIEW `vw_total_produtos` AS
+SELECT
+	COUNT(id_produto) as total_produto
+FROM produto;
+
+-- View para verificar os clientes que tem uma solicitação com cotação aprovada com todos os produtos
+CREATE OR REPLACE VIEW `vw_clientes_solicitacao_cotacao_aprovada_todos_produtos` AS
+SELECT
+	c.*
+FROM
+	cliente c
+INNER JOIN
+	solicitacao s ON c.id_cliente = s.id_cliente
+INNER JOIN
+	vw_total_produto_solicitacao tps ON s.id_solicitacao = tps.id_solicitacao
+INNER JOIN
+	vw_total_produtos tp ON tps.total_produto = tp.total_produto
+GROUP BY id_cliente;
+
+-- View para retornar a quantidade de cotacoes de uma solicitacao]
+CREATE OR REPLACE VIEW `vw_total_cotacao` AS
+SELECT
+	s.id_solicitacao,
+	COUNT(c.id_cotacao) as total_cotacao
+FROM
+	solicitacao s
+INNER JOIN
+	cotacao c ON s.id_solicitacao = c.id_solicitacao
+GROUP BY s.id_solicitacao;
+
+-- Select para retornar somente as solicitações com uma cotação
+CREATE OR REPLACE VIEW `vw_solicitacao_unique_cotacao` AS
+SELECT
+	s.*
+FROM
+	solicitacao s
+INNER JOIN
+	vw_total_cotacao tc ON s.id_solicitacao = tc.id_solicitacao
+WHERE tc.total_cotacao = 1;
