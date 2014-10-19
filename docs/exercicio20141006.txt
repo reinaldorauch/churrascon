@@ -1,0 +1,5 @@
+Os produtos que nunca foram cotados.
+Quais clientes compraram o(s) produto(s) mais vendido(s) entre 01/06/2014.
+Quais clientes que já compraram todos os produtos disponíveis?
+-- As cotaçẽs de menor valor.
+-- Quais solicitações que tiveram um único fornecedor cotando.
